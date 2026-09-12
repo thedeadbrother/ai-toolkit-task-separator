@@ -36,9 +36,6 @@ Conventions bridged to ai-toolkit:
     training and sampling alike
 """
 
-import base64
-import hashlib
-import json
 import os
 from functools import partial
 from typing import TYPE_CHECKING, List, Optional
@@ -179,73 +176,6 @@ class MiniMaxH3VaeBundle(torch.nn.Module):
 
     def disable_gradient_checkpointing(self):
         self.enable_gradient_checkpointing(False)
-
-
-class _StubTransformer(torch.nn.Module):
-    """Placeholder swapped in for the real ~33B DiT when
-    ``model_kwargs.text_encode_only`` is set. Keeps ``load_model`` and
-    ``aitk_post_load`` happy (device/dtype, no quantization or offload work
-    to do) while carrying no real weights, so a run whose only job is
-    pre-caching text embeddings doesn't pay the transformer's RAM/VRAM cost.
-    Not usable for training or sampling."""
-
-    def __init__(self, dtype: torch.dtype):
-        super().__init__()
-        # a real parameter so .to()/.device behave like a normal module
-        self._stub_weight = torch.nn.Parameter(
-            torch.zeros(1, dtype=dtype), requires_grad=False
-        )
-
-    @property
-    def device(self):
-        return self._stub_weight.device
-
-    def aitk_post_load(self, device=None, **_kwargs):
-        # nothing to quantize or offload on a stub; just honor placement
-        if device is not None:
-            self.to(device)
-        return self
-
-    def forward(self, *args, **kwargs):
-        raise RuntimeError(
-            "MiniMax-H3 transformer was loaded as a text_encode_only stub "
-            "and cannot run forward/training/sampling. Drop "
-            "model_kwargs.text_encode_only to load the real model."
-        )
-
-
-class _StubTextEncoder(torch.nn.Module):
-    """Placeholder swapped in for the real Qwen3-VL-32B text encoder when
-    ``model_kwargs.text_encoder_precached`` is set. Used for real training
-    runs where every prompt the run will ever need (every dataset item, plus
-    the handful of "static" prompts -- see MinimaxH3Model._static_prompt_
-    cache_path) has already been pre-cached to disk, so the 32B encoder never
-    needs to sit in RAM/VRAM alongside the transformer. MinimaxH3Model.
-    get_prompt_embeds reads the disk cache directly instead of calling this
-    module; it exists only to satisfy load_model()/aitk_post_load."""
-
-    def __init__(self, dtype: torch.dtype):
-        super().__init__()
-        self._stub_weight = torch.nn.Parameter(
-            torch.zeros(1, dtype=dtype), requires_grad=False
-        )
-
-    @property
-    def device(self):
-        return self._stub_weight.device
-
-    def aitk_post_load(self, device=None, **_kwargs):
-        if device is not None:
-            self.to(device)
-        return self
-
-    def forward(self, *args, **kwargs):
-        raise RuntimeError(
-            "MiniMax-H3 text encoder was loaded as a text_encoder_precached "
-            "stub and cannot run forward. This should be unreachable -- "
-            "MinimaxH3Model.get_prompt_embeds reads the disk cache directly "
-            "instead of calling the text encoder in this mode."
-        )
 
 
 class MinimaxH3Model(BaseModel):
@@ -445,13 +375,7 @@ class MinimaxH3Model(BaseModel):
         self.assistant_lora.is_active = True
         self.invert_assistant_lora = False
 
-    def _load_transformer(self):
-        if bool(self.model_config.model_kwargs.get("text_encode_only", False)):
-            self.print_and_status_update(
-                "model_kwargs.text_encode_only set: loading a stub transformer "
-                "(text encoder only, DiT weights skipped)"
-            )
-            return _StubTransformer(dtype=self.torch_dtype)
+    def _load_transformer(self) -> MiniMaxH3Transformer:
         dit_path = self._resolve_comfy_file(self._dit_component())
         self.print_and_status_update(f"Loading transformer from {dit_path}")
         # the mixin single-file path: config sniffed from the checkpoint
@@ -459,40 +383,7 @@ class MinimaxH3Model(BaseModel):
         # else at its stored precision (the bf16/fp16/fp32 mix is deliberate)
         return MiniMaxH3Transformer.load_model(dit_path, dtype=self.torch_dtype)
 
-    def _static_prompt_cache_path(self, prompt: str) -> str:
-        """On-disk cache location for a plain-text prompt encoded WITHOUT
-        control images -- the handful of "static" prompts (unconditional,
-        trigger word, DOP class) a training run computes once itself, outside
-        the per-dataset-item ``_t_e_cache`` mechanism. Written by
-        scripts/cache_minimax_h3_text_embeds.py, read back by
-        get_prompt_embeds when model_kwargs.text_encoder_precached is set."""
-        cache_dir = self.model_config.model_kwargs.get("static_text_embed_cache_dir")
-        if not cache_dir:
-            raise ValueError(
-                "model_kwargs.static_text_embed_cache_dir is required "
-                "alongside model_kwargs.text_encoder_precached -- see "
-                "scripts/train_minimax_h3_text_encoder_skip.py"
-            )
-        hash_input = json.dumps(
-            {
-                "prompt": prompt,
-                "text_embedding_space_version": self.text_embedding_space_version,
-            },
-            sort_keys=True,
-        ).encode("utf-8")
-        hash_str = base64.urlsafe_b64encode(hashlib.md5(hash_input).digest()).decode(
-            "ascii"
-        ).replace("=", "")
-        return os.path.join(cache_dir, f"static_{hash_str}.safetensors")
-
     def _load_text_encoder(self):
-        if bool(self.model_config.model_kwargs.get("text_encoder_precached", False)):
-            self.print_and_status_update(
-                "model_kwargs.text_encoder_precached set: loading a stub "
-                "text encoder (assumes every prompt is already cached to disk)"
-            )
-            return None, None, _StubTextEncoder(dtype=self.te_torch_dtype)
-
         from accelerate import init_empty_weights
         from transformers import (
             AutoConfig,
@@ -606,9 +497,7 @@ class MinimaxH3Model(BaseModel):
         transformer = self._load_transformer()
 
         # load assistant lora if specified (merged into the quantized weights)
-        # -- not applicable to the text_encode_only stub, which has no real
-        # modules to attach a LoRA network to
-        if self.model_config.assistant_lora_path is not None and not isinstance(transformer, _StubTransformer):
+        if self.model_config.assistant_lora_path is not None:
             self.load_training_adapter(transformer)
 
         # quantize + offload + placement, all driven by model_config
@@ -647,36 +536,6 @@ class MinimaxH3Model(BaseModel):
     def get_prompt_embeds(self, prompt, control_images=None) -> AdvancedPromptEmbeds:
         if isinstance(prompt, str):
             prompt = [prompt]
-
-        if bool(self.model_config.model_kwargs.get("text_encoder_precached", False)):
-            if control_images is not None:
-                raise RuntimeError(
-                    "MiniMax-H3 text encoder is stubbed "
-                    "(model_kwargs.text_encoder_precached); cannot encode a "
-                    "prompt with control images live. Dataset items go "
-                    "through their own on-disk cache -- this path is only "
-                    "for the plain-text \"static\" prompts (unconditional, "
-                    "trigger word, DOP class)."
-                )
-            embeds_list, tags_list = [], []
-            for p in prompt:
-                path = self._static_prompt_cache_path(p.strip())
-                if not os.path.exists(path):
-                    raise RuntimeError(
-                        "MiniMax-H3 text encoder is stubbed "
-                        f"(model_kwargs.text_encoder_precached) and no cached "
-                        f"embedding exists for prompt {p!r} at {path}. Run "
-                        "scripts/cache_minimax_h3_text_embeds.py again (it "
-                        "also caches this prompt), or drop "
-                        "model_kwargs.text_encoder_precached."
-                    )
-                pe = AdvancedPromptEmbeds.load(path)
-                embeds_list.append(pe.text_embeds[0])
-                tags_list.append(pe.text_token_tags[0])
-            pe = AdvancedPromptEmbeds(text_embeds=embeds_list, text_token_tags=tags_list)
-            pe.frozen_dtype_keys = ["text_token_tags"]
-            return pe
-
         if self.text_encoder.device == torch.device("cpu"):
             self.text_encoder.to(self.device_torch)
 
