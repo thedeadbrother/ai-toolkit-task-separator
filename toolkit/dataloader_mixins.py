@@ -2562,6 +2562,38 @@ class TextEmbeddingCachingMixin:
             # if did_move:
             #     self.sd.restore_device_state()
 
+    def text_embeddings_are_cached(self: 'AiToolkitDataset') -> bool:
+        """Read-only check: True iff every text embedding this dataset would
+        need (main caption, DOP, dropout blanks, D-OPSD teacher) is already
+        saved to disk -- the same target paths cache_text_embeddings()
+        computes, without ever calling the text encoder. Safe to call before
+        the model has loaded any weights: only needs self.sd's cache-key
+        metadata (text_embedding_space_version etc, set at __init__)."""
+        for file_item in self.file_list:
+            text_embedding_path = file_item.get_text_embedding_path(recalculate=True)
+            targets = [text_embedding_path]
+            if self.dataset_config.diff_output_preservation:
+                dop_path = file_item.get_dop_text_embedding_path(recalculate=True)
+                if dop_path != text_embedding_path:
+                    targets.append(dop_path)
+            if self.dataset_config.caption_dropout_rate > 0:
+                blank_path = file_item.get_blank_text_embedding_path(recalculate=True)
+                if blank_path != text_embedding_path:
+                    targets.append(blank_path)
+                if self.dataset_config.diff_output_preservation:
+                    dop_blank_path = file_item.get_dop_blank_text_embedding_path(recalculate=True)
+                    if dop_blank_path not in targets:
+                        targets.append(dop_blank_path)
+            if getattr(file_item, 'dopsd_self_ref', False):
+                targets.append(file_item.get_dopsd_text_embedding_path(recalculate=True))
+                if self.dataset_config.caption_dropout_rate > 0:
+                    dopsd_blank_path = file_item.get_dopsd_blank_text_embedding_path(recalculate=True)
+                    if dopsd_blank_path not in targets:
+                        targets.append(dopsd_blank_path)
+            if any(not os.path.exists(p) for p in targets):
+                return False
+        return True
+
 
 class CLIPCachingMixin:
     def __init__(self: 'AiToolkitDataset', **kwargs):
