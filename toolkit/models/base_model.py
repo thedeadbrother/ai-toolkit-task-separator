@@ -129,13 +129,16 @@ class BaseModel:
 
         self.device_state = None
 
+        # unset until load_model() runs -- explicitly None (rather than a bare
+        # annotation) so code that probes a not-yet-loaded model (hasattr,
+        # "is not None") works instead of raising AttributeError
         self.pipeline: Union[None, 'StableDiffusionPipeline',
-                             'CustomStableDiffusionXLPipeline', 'PixArtAlphaPipeline']
-        self.vae: Union[None, 'AutoencoderKL']
-        self.model: Union[None, 'Transformer2DModel', 'UNet2DConditionModel']
+                             'CustomStableDiffusionXLPipeline', 'PixArtAlphaPipeline'] = None
+        self.vae: Union[None, 'AutoencoderKL'] = None
+        self.model: Union[None, 'Transformer2DModel', 'UNet2DConditionModel'] = None
         self.text_encoder: Union[None, 'CLIPTextModel',
-                                 List[Union['CLIPTextModel', 'CLIPTextModelWithProjection']]]
-        self.tokenizer: Union[None, 'CLIPTokenizer', List['CLIPTokenizer']]
+                                 List[Union['CLIPTextModel', 'CLIPTextModelWithProjection']]] = None
+        self.tokenizer: Union[None, 'CLIPTokenizer', List['CLIPTokenizer']] = None
         self.noise_scheduler: Union[None, 'DDPMScheduler'] = noise_scheduler
 
         self.refiner_unet: Union[None, 'UNet2DConditionModel'] = None

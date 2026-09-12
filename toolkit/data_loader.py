@@ -389,7 +389,14 @@ class AiToolkitDataset(LatentCachingMixin, ControlCachingMixin, CLIPCachingMixin
             dataset_config: 'DatasetConfig',
             batch_size=1,
             sd: 'StableDiffusion' = None,
+            skip_setup_epoch: bool = False,
     ):
+        # skip_setup_epoch: build file_list only, skip the epoch-0 caching
+        # passes (latents/clip-vision/text-embeddings/controls). For probing
+        # (e.g. checking whether text embeddings are already fully cached)
+        # before any model weights are loaded -- those passes need real
+        # encoders/VAEs and would crash otherwise.
+        self.skip_setup_epoch = skip_setup_epoch
         self.dataset_config = dataset_config
         # update bucket divisibility
         self.dataset_config.bucket_tolerance = sd.get_bucket_divisibility()
@@ -598,7 +605,8 @@ class AiToolkitDataset(LatentCachingMixin, ControlCachingMixin, CLIPCachingMixin
             else:
                 print_acc(f"  -  Found {len(self.file_list)} images after adding flips")
 
-        self.setup_epoch()
+        if not self.skip_setup_epoch:
+            self.setup_epoch()
 
     def setup_epoch(self):
         if self.epoch_num == 0:
