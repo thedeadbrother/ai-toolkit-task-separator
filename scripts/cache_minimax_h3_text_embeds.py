@@ -96,8 +96,9 @@ def cache_text_embeds_for_process(process):
     # deduped automatically since they hash to the same cache path
     for static_prompt in {"", process.train_config.unconditional_prompt.strip()}:
         static_path = process.sd._static_prompt_cache_path(static_prompt)
+        print_acc(f"static prompt path :{static_path}")
         if not os.path.exists(static_path):
-            print_acc(f" - Caching static prompt {static_prompt!r}")
+            print_acc(f" - Caching static prompt {static_prompt!r} at {static_path}")
             pe = process.sd.encode_prompt(static_prompt)
             pe.save(static_path)
 
