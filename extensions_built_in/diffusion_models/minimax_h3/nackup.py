@@ -66,6 +66,7 @@ from toolkit.samplers.custom_flowmatch_sampler import (
 )
 
 from .src import packing
+from toolkit.print import print_acc
 
 packing_video_exts = [".mp4", ".avi", ".mov", ".webm", ".mkv", ".wmv", ".m4v", ".flv"]
 from .src.audio_vae import MiniMaxH3AudioVAE
@@ -271,6 +272,7 @@ class MinimaxH3Model(BaseModel):
                 "model_kwargs.partition must be fl2va, fl2va_pruned, ref2va, "
                 f"or ref2va_pruned, got {partition}"
             )
+        print_acc(f"MiniMax-H3: using {partition} partition of the released weights")                                       
         return f"dit_{partition}"
 
     def load_training_adapter(self, transformer: MiniMaxH3Transformer):

@@ -66,6 +66,7 @@ def check_feature_compatibility(process) -> list:
         )
 
     if any(ds.trigger_word is not None for ds in process.dataset_configs):
+        print_acc(f"{process.dataset_configs}")
         reasons.append(
             "a trigger_word is set -- trigger-word prompts are not covered "
             "by the pre-cache"
