@@ -67,7 +67,7 @@ from toolkit.util.ostris_quant import OstrisLinear
 from toolkit.samplers.custom_flowmatch_sampler import (
     CustomFlowMatchEulerDiscreteScheduler,
 )
-
+from toolkit.print import print_acc
 from .src import packing
 
 packing_video_exts = [".mp4", ".avi", ".mov", ".webm", ".mkv", ".wmv", ".m4v", ".flv"]
@@ -609,7 +609,10 @@ class MinimaxH3Model(BaseModel):
         # -- not applicable to the text_encode_only stub, which has no real
         # modules to attach a LoRA network to
         if self.model_config.assistant_lora_path is not None and not isinstance(transformer, _StubTransformer):
+            print_acc(f"loading assistant LoRA for training : {self.model_config.assistant_lora_path is not None} and {not isinstance(transformer, _StubTransformer)}")
             self.load_training_adapter(transformer)
+        else:
+            print_acc(f"not loading assistant LoRA for training : {self.model_config.assistant_lora_path is not None} and {not isinstance(transformer, _StubTransformer)}")
 
         # quantize + offload + placement, all driven by model_config
         transformer.aitk_post_load(**self.component_load_kwargs("transformer"))
