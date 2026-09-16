@@ -57,6 +57,8 @@ class SampleItem:
         self.sample_steps: int = kwargs.get('sample_steps', sample_config.sample_steps)
         self.fps: int = kwargs.get('fps', sample_config.fps)
         self.num_frames: int = kwargs.get('num_frames', sample_config.num_frames)
+        # audio models: max seconds to generate
+        self.duration: Optional[float] = kwargs.get('duration', sample_config.duration)
         self.ctrl_img: Optional[str] = kwargs.get('ctrl_img', None)
         self.ctrl_idx: int = kwargs.get('ctrl_idx', 0)
         # for multi control image models
@@ -97,6 +99,7 @@ class SampleConfig:
         self.extra_values = kwargs.get('extra_values', [])
         self.num_frames = kwargs.get('num_frames', 1)
         self.fps: int = kwargs.get('fps', 16)
+        self.duration: Optional[float] = kwargs.get('duration', None)
         if self.num_frames > 1 and self.ext not in ['webp']:
             print("Changing sample extention to animated webp")
             self.ext = 'webp'
@@ -1155,6 +1158,7 @@ class GenerateImageConfig:
             ctrl_img_3: Optional[str] = None,  # third control image for multi control model
             num_frames: int = 1,
             fps: int = 15,
+            duration: Optional[float] = None,  # audio models: max seconds
             ctrl_idx: int = 0,
             do_cfg_norm: bool = False,
     ):
@@ -1187,6 +1191,7 @@ class GenerateImageConfig:
         self.extra_values = extra_values if extra_values is not None else []
         self.num_frames = num_frames
         self.fps = fps
+        self.duration = duration
         self.ctrl_img = ctrl_img
         self.ctrl_idx = ctrl_idx
         
@@ -1301,6 +1306,10 @@ class GenerateImageConfig:
             cap.release()
             if ok:
                 img = PILImage.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        elif ext in ['.mp3', '.wav', '.flac', '.ogg']:
+            # waveform cover rendered at thumb size so the UI never has to read the tags
+            from toolkit.audio.album_artwork import create_artwork, load_waveform
+            img = create_artwork(load_waveform(media_path), size=300)
         if img is None:
             return False
         img = img.convert('RGB')
